@@ -1,5 +1,13 @@
 # Football Investor relay
 
+## Persistent profiles and rankings
+
+Both production services must use the same private `DATABASE_URL` environment variable pointing to an external Postgres database (such as Neon Free). Set it in Render's Environment page, never in the repository or game client. Schema creation is automatic at startup. SQLite is only the local-development fallback; registration is disabled on Render until persistent Postgres is configured.
+
+The new native Profile menu reserves a case-insensitive unique ID and supports authenticated avatar upload and recovery by a private random key. The server stores only a hash of that key. Uploaded images are validated, resized to 256 pixels and stripped of original metadata. Public profile IDs, avatars and top-50 ranking entries are returned by the `/api` endpoints. API bodies are limited and rate-limited; requests are not logged. Do not commit database files or credentials.
+
+Leaderboard ranks one best net-profit result per profile from completed relay matches. `/ws` result states trigger calculation against `market_catalog.json`: actual archive prices, final values and recorded transfer-window values determine the result. The client cannot submit an arbitrary profit number. Online matches still trust their host's reported ownership and actions; this is a community ranking, not a cheat-proof competitive server. Matches and rooms themselves remain ephemeral. Test the profile API, recovery, images, scoring and restart persistence with `python test_profiles.py`.
+
 This server connects the native game clients over WebSockets. Players make outbound connections, so they do not need router port forwarding. A room host still runs the game rules; this service forwards authenticated room messages and manages room names, short codes, passwords, capacity and discovery. Rooms disappear when the host disconnects or the service restarts. There is no saved game progress, database, AI or paid API.
 
 The service is deployed on Render’s Free plan in Frankfurt. **Live endpoint: `wss://football-investor-relay.onrender.com/ws`.** Health check: https://football-investor-relay.onrender.com/health . The game is preconfigured to use it. Public game-client integration tests passed for room creation, listing, passwords, capacity, hidden identities, gameplay synchronization and disconnects. Source: https://github.com/MinzarescuNectarie/football-investor-relay .
@@ -13,7 +21,7 @@ The service is deployed on Render’s Free plan in Frankfurt. **Live endpoint: `
 5. If using **New → Web Service** instead, choose Python, build command `pip install -r requirements.txt`, start command `python server.py`, Free plan, health check `/health`, and environment variable `BIND_ADDRESS=0.0.0.0`. Keep the included `.python-version` file to select the latest Python 3.12 patch.
 6. Wait for the service to become Live. Open its `https://...onrender.com/health` address; it should return the service name and protocol number.
 7. In the game, open **Settings → General → Internet relay address**, enter `wss://YOUR-SERVICE.onrender.com/ws`, and choose **Apply relay address**. Everyone uses the same address. Then choose **Play → Online → Internet relay → Create/Search**. Share the short `FI-R-...` room code to join directly. Private codes end in `-P` and open the password prompt.
-8. To preconfigure new copies, put that address in `relay-config.json` beside the game executable: `{"url":"wss://YOUR-SERVICE.onrender.com/ws"}`. This is used when there is no saved address; players with an old address should update Settings.
+8. To preconfigure new copies, put that address in `config/relay-config.json` inside the game folder: `{"url":"wss://YOUR-SERVICE.onrender.com/ws"}`. This is used when there is no saved address; players with an old address should update Settings.
 
 Keep the service on Free; without a payment method Render suspends free services rather than charging extra bandwidth usage. A host restart closes all active rooms.
 
@@ -42,3 +50,11 @@ Server tests: `.venv\Scripts\python test_server.py -v`. Game integration test: r
 - The socket determines the participant ID and room; clients cannot choose another sender ID. Only a room host can publish state. Guests may send pick/lock requests and the host validates them with existing budget and round rules.
 - Room names are unique after trimming and case folding, within this running relay. Public listings include names and occupancy for private rooms, but not their passwords. Host authority and game fairness are still trusted, as in the original game.
 - Configure `PORT` and `BIND_ADDRESS` via environment variables. Render supplies `PORT` automatically and terminates TLS. Use only public `wss://` addresses in the game; plain `ws://` is permitted solely for localhost testing.
+
+## Backup relay
+
+Primary: wss://football-investor-relay.onrender.com/ws (Frankfurt).
+Backup: wss://football-investor-relay-backup.onrender.com/ws (Oregon).
+The game searches both and routes selected rooms to their own relay. Creating or joining a room retries the other relay after a connection failure (up to 75 seconds per service); a direct code also checks the other relay when the room is absent. Wrong passwords and full rooms are not retried on another service.
+Active rooms are held in memory and cannot migrate: a failed relay closes its rooms. Create a new room on the backup. Both services use the same free Render workspace and shared quotas, so this does not cover provider-wide outages or exhausted workspace allowance. No artificial keep-alive is used. Room-name uniqueness is enforced within each relay; the client also rejects names already visible in either directory, but concurrent cross-relay creations are not globally atomic.
+Custom primary addresses disable the bundled backup to avoid unexpectedly sending room passwords to a different operator. An optional backup can be entered in Settings.

@@ -8,6 +8,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from aiohttp import web, WSMsgType
+from profiles import install, record_results
 
 MAX_MESSAGE = 262144
 MAX_CLIENTS = 200
@@ -19,6 +20,7 @@ class Client:
     transport: object = None
     room: object = None
     id: int = 0
+    profile_id: str = ''
     tokens: float = 60
     checked: float = field(default_factory=time.monotonic)
 
@@ -35,7 +37,8 @@ class Room:
     status: str = 'lobby'
 
 def create_app():
-    app = web.Application(client_max_size=MAX_MESSAGE)
+    app = web.Application(client_max_size=1500000)
+    store = install(app)
     rooms, clients = {}, set()
 
     async def send(client, data):
@@ -67,6 +70,21 @@ def create_app():
 
     async def dispatch(client, data):
         kind = data.get('type')
+        if kind in ('create','join'):
+            uid = str(data.get('profile_id','')).lower()
+            token = str(data.get('profile_token',''))
+            if uid:
+                if not await asyncio.to_thread(store.auth,uid,token):
+                    return await error(client,'Restore or create your profile before joining.')
+                client.profile_id = uid
+                if kind == 'join': data['name'] = uid
+            else:
+                client.profile_id = ''
+                if kind == 'join':
+                    proposed=str(data.get('name','')).strip().lower()
+                    reserved=(await asyncio.to_thread(store.run,[('SELECT id FROM profiles WHERE id=?',(proposed,))]))[0]
+                    if reserved: return await error(client,'That ID belongs to a profile. Restore it using its recovery key.')
+
         if kind == 'list':
             listing = [{'name': r.name, 'code': r.code, 'private': bool(r.password),
                         'players': len(r.members), 'capacity': r.capacity,
@@ -106,6 +124,8 @@ def create_app():
             if not room: return await error(client, 'Room not found or closed.')
             if room.status != 'lobby' or len(room.members) >= room.capacity:
                 return await error(client, 'Room is full or the game has already started.')
+            if client.profile_id and any(member.profile_id == client.profile_id for member in room.members.values()):
+                return await error(client, 'Your profile is already in this lobby.')
             password = data.get('password', '')
             if not isinstance(password, str) or len(password) > 128: return await error(client, 'Invalid password.')
             if room.password:
@@ -125,13 +145,18 @@ def create_app():
             if not isinstance(state, dict) or state.get('phase') not in ('lobby', 'draft', 'results'):
                 return await error(client, 'Invalid game state.')
             room.status = state['phase']
+            for member_id,member in room.members.items():
+                person=state.get('players',{}).get(str(member_id),state.get('players',{}).get(member_id))
+                if member.profile_id and isinstance(person,dict): person['name']=member.profile_id
+            if room.status == 'results':
+                await asyncio.to_thread(record_results,store,dict(room.members),room,state)
             for id, guest in list(room.members.items()):
                 if id != 1: await send(guest, {'type': 'state', 'state': state})
         elif kind == 'action':
             room = client.room
             if not room or client.id == 1: return await error(client, 'Join a room first.')
             action, pick = data.get('action'), data.get('pick')
-            if action not in ('pick', 'lock') or not isinstance(pick, int): return await error(client, 'Invalid player action.')
+            if action not in ('pick', 'hold') or not isinstance(pick, int): return await error(client, 'Invalid player action.')
             await send(room.members[1], {'type': 'action', 'id': client.id, 'action': action, 'pick': pick})
         elif kind == 'leave':
             await detach(client)
@@ -172,7 +197,7 @@ def create_app():
         return ws
 
     async def health(request):
-        return web.json_response({'service': 'Football Investor relay', 'protocol': 1, 'rooms': len(rooms)})
+        return web.json_response({'service': 'Football Investor relay', 'protocol': 1, 'rooms': len(rooms), 'profiles': store.ready, 'persistent_profiles': bool(store.url)})
 
     async def shutdown(app):
         await asyncio.gather(*(c.ws.close(code=1001, message=b'Server restarting') for c in list(clients)))
