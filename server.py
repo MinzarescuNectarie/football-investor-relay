@@ -21,6 +21,7 @@ class Client:
     room: object = None
     id: int = 0
     profile_id: str = ''
+    avatar: str = ''
     tokens: float = 60
     checked: float = field(default_factory=time.monotonic)
 
@@ -77,6 +78,8 @@ def create_app():
                 if not await asyncio.to_thread(store.auth,uid,token):
                     return await error(client,'Restore or create your profile before joining.')
                 client.profile_id = uid
+                profile_rows=(await asyncio.to_thread(store.run,[('SELECT avatar FROM profiles WHERE id=?',(uid,))]))[0]
+                client.avatar=profile_rows[0][0] if profile_rows else ''
                 if kind == 'join': data['name'] = uid
             else:
                 client.profile_id = ''
@@ -137,7 +140,7 @@ def create_app():
             room.next_id += 1
             room.members[client.id] = client
             await send(client, {'type': 'joined', 'id': client.id, 'code': room.code})
-            await send(room.members[1], {'type': 'peer_joined', 'id': client.id, 'name': str(data.get('name', 'Guest')).strip()[:40] or 'Guest'})
+            await send(room.members[1], {'type': 'peer_joined', 'id': client.id, 'name': str(data.get('name', 'Guest')).strip()[:40] or 'Guest', 'avatar':client.avatar})
         elif kind == 'state':
             room = client.room
             if not room or client.id != 1: return await error(client, 'Only the host may send game state.')
@@ -147,7 +150,9 @@ def create_app():
             room.status = state['phase']
             for member_id,member in room.members.items():
                 person=state.get('players',{}).get(str(member_id),state.get('players',{}).get(member_id))
-                if member.profile_id and isinstance(person,dict): person['name']=member.profile_id
+                if member.profile_id and isinstance(person,dict):
+                    person['name']=member.profile_id
+                    person['avatar']=member.avatar
             if room.status == 'results':
                 await asyncio.to_thread(record_results,store,dict(room.members),room,state)
             for id, guest in list(room.members.items()):
