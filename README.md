@@ -2,7 +2,7 @@
 
 This server connects the native game clients over WebSockets. Players make outbound connections, so they do not need router port forwarding. A room host still runs the game rules; this service forwards authenticated room messages and manages room names, short codes, passwords, capacity and discovery. Rooms disappear when the host disconnects or the service restarts. There is no saved game progress, database, AI or paid API.
 
-The service is implemented and locally tested. **It is not yet deployed to a public address.**
+The service is deployed on Render’s Free plan in Frankfurt. **Live endpoint: `wss://football-investor-relay.onrender.com/ws`.** Health check: https://football-investor-relay.onrender.com/health . The game is preconfigured to use it. Public game-client integration tests passed for room creation, listing, passwords, capacity, hidden identities, gameplay synchronization and disconnects. Source: https://github.com/MinzarescuNectarie/football-investor-relay .
 
 ## Deploy with a new free account
 
