@@ -102,7 +102,7 @@ def install(app):
         return web.json_response(await asyncio.to_thread(public,uid))
     async def leaderboard(request):
         rows=(await asyncio.to_thread(store.run,[('SELECT p.id,p.avatar,MAX(r.profit) AS best FROM profiles p JOIN results r ON p.id=r.profile_id WHERE r.budget=100 GROUP BY p.id,p.avatar ORDER BY best DESC,p.id ASC LIMIT 50',())]))[0]
-        return web.json_response({'entries':[{'id':uid,'avatar':avatar,'profit':profit/1000000} for uid,avatar,profit in rows], 'metric':'Highest completed online-match net profit (€M)'})
+        return web.json_response({'entries':[{'id':uid,'avatar':avatar,'profit':profit/1000000} for uid,avatar,profit in rows], 'metric':'Highest completed standard-budget online-match net profit (€M)', 'standard_budget':100})
     app.router.add_post('/api/profiles',create)
     app.router.add_get('/api/profiles/{uid}',profile)
     app.router.add_post('/api/profiles/{uid}/restore',restore)
