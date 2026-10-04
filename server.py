@@ -233,6 +233,10 @@ def create_app():
             for id, guest in list(room.members.items()):
                 if id == 1 and isinstance(state.get('rules'),dict): await send(guest,{'type':'clock','server_time':time.time()})
                 if id != 1: await send(guest, {'type': 'state', 'state': state, 'server_time':time.time()})
+        elif kind == 'sync_time':
+            sent_ms = data.get('sent_ms')
+            if not isinstance(sent_ms,int) or isinstance(sent_ms,bool) or not 0 <= sent_ms < 10**15: return await error(client,'Invalid clock probe.')
+            await send(client,{'type':'time_sync','sent_ms':sent_ms,'server_time':time.time()})
         elif kind == 'view':
             room = client.room
             if not room or room.status != 'draft' or room.state.get('market_stage') != 'transfer': return await error(client,'No active transfer window.')
