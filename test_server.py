@@ -31,6 +31,11 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def create(self, connection, name='Test room', password='', capacity=3):
         return await self.request(connection, {'type':'create', 'name':name, 'password':password, 'capacity':capacity, 'budget':100})
 
+    async def ready_pair(self, host, guest):
+        await guest.send_json({'type':'ready','ready':True})
+        await host.receive_json()
+        await self.request(host,{'type':'ready','ready':True})
+
     async def test_rooms_passwords_authority_and_cleanup(self):
         host, guest, stranger, other_host = [await self.connect() for _ in range(4)]
         created = await self.create(host, password='private-test', capacity=2)
@@ -56,6 +61,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(action['id'], 2)  # Claimed sender IDs cannot override the socket identity.
         other = await self.create(other_host, name='Other room')
         self.assertEqual(other['type'], 'created')
+        await self.ready_pair(host,guest)
         await host.send_json({'type':'state', 'state':{'phase':'draft', 'marker':'room-one'}})
         state = await guest.receive_json()
         self.assertEqual(state['state']['marker'], 'room-one')
@@ -71,6 +77,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         created = await self.create(host)
         await self.request(guest, {'type':'join', 'code':created['code']})
         await host.receive_json()
+        await self.ready_pair(host,guest)
         await host.send_json({'type':'state', 'state':{'phase':'draft'}})
         await guest.receive_json()
         result = await self.request(late, {'type':'join', 'code':created['code']})
@@ -87,6 +94,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         created=await self.create(host)
         joined=await self.request(guest,{'type':'join','code':created['code'],'name':'Guest'})
         await host.receive_json()
+        await self.ready_pair(host,guest)
         await host.send_json({'type':'state','state':{'phase':'draft','players':{'2':{'picks':[4,7]}},'marker':'preserved'}})
         await guest.receive_json()
         await guest.close()
