@@ -180,6 +180,25 @@ def create_app():
                 return await error(client,'Readiness can only change in the lobby.')
             client.ready = value
             await send(room.members[1],{'type':'peer_ready','id':client.id,'ready':value})
+        elif kind == 'transfer_host':
+            room = client.room
+            target_id = data.get('id')
+            if not room or client.id != 1 or room.status != 'lobby':
+                return await error(client,'Only the host can transfer control in the lobby.')
+            if any(m.detached_at for m in room.members.values()):
+                return await error(client,'Wait for everyone to reconnect before transferring control.')
+            if not isinstance(target_id,int) or isinstance(target_id,bool) or target_id == 1 or target_id not in room.members:
+                return await error(client,'Invalid new host.')
+            target = room.members[target_id]
+            client.id, target.id = target_id, 1
+            room.members[1], room.members[target_id] = target, client
+            people = room.state.get('players',{})
+            host_key = '1' if '1' in people else 1
+            target_key = str(target_id) if str(target_id) in people else target_id
+            if host_key in people and target_key in people:
+                people[host_key],people[target_key] = people[target_key],people[host_key]
+            for member in list(room.members.values()):
+                await send(member,{'type':'host_transferred','id':member.id,'state':room.state})
         elif kind == 'kick':
             room = client.room
             target_id = data.get('id')
