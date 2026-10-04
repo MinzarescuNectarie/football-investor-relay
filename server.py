@@ -22,6 +22,7 @@ class Client:
     id: int = 0
     profile_id: str = ''
     avatar: str = ''
+    ready: bool = False
     tokens: float = 60
     resume_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     detached_at: float = 0
@@ -111,7 +112,7 @@ def create_app():
             old=next((m for m in room.members.values() if hmac.compare_digest(m.resume_token,str(data.get('resume_token','')))),None)
             if not old or not old.detached_at or time.monotonic()-old.detached_at>90:
                 return await error(client,'Recovery unavailable or already connected.')
-            client.room,client.id,client.profile_id,client.avatar,client.resume_token=room,old.id,old.profile_id,old.avatar,old.resume_token
+            client.room,client.id,client.profile_id,client.avatar,client.resume_token,client.ready=room,old.id,old.profile_id,old.avatar,old.resume_token,old.ready
             room.members[client.id]=client;old.room=None
             await send(client,{'type':'resumed','id':client.id,'code':room.code,'missing':[m.id for m in room.members.values() if m.detached_at]})
             for member in list(room.members.values()):
@@ -172,17 +173,39 @@ def create_app():
             room.members[client.id] = client
             await send(client, {'type': 'joined', 'id': client.id, 'code': room.code, 'resume_token':client.resume_token})
             await send(room.members[1], {'type': 'peer_joined', 'id': client.id, 'name': str(data.get('name', 'Guest')).strip()[:40] or 'Guest', 'avatar':client.avatar})
+        elif kind == 'ready':
+            room = client.room
+            value = data.get('ready')
+            if not room or room.status != 'lobby' or not isinstance(value,bool):
+                return await error(client,'Readiness can only change in the lobby.')
+            client.ready = value
+            await send(room.members[1],{'type':'peer_ready','id':client.id,'ready':value})
+        elif kind == 'kick':
+            room = client.room
+            target_id = data.get('id')
+            if not room or client.id != 1 or room.status != 'lobby':
+                return await error(client,'Only the host can kick players from the lobby.')
+            if not isinstance(target_id,int) or isinstance(target_id,bool) or target_id == 1 or target_id not in room.members:
+                return await error(client,'Invalid player to kick.')
+            target = room.members[target_id]
+            await send(target,{'type':'kicked'})
+            await detach(target)
         elif kind == 'state':
             room = client.room
             if not room or client.id != 1: return await error(client, 'Only the host may send game state.')
             state = data.get('state')
             if not isinstance(state, dict) or state.get('phase') not in ('lobby', 'draft', 'results'):
                 return await error(client, 'Invalid game state.')
+            if room.status == 'lobby' and state['phase'] == 'draft' and any(not m.ready or m.detached_at for m in room.members.values()):
+                return await error(client,'All players must be ready before starting.')
+            if state['phase'] == 'lobby' and room.status != 'lobby':
+                for member in room.members.values(): member.ready = False
             room.status = state['phase']
             state['series_games']=room.series_games
             room.state=state
             for member_id,member in room.members.items():
                 person=state.get('players',{}).get(str(member_id),state.get('players',{}).get(member_id))
+                if isinstance(person,dict): person['ready'] = member.ready
                 if member.profile_id and isinstance(person,dict):
                     person['name']=member.profile_id
                     person['avatar']=member.avatar
