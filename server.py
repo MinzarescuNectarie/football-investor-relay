@@ -82,8 +82,9 @@ def create_app():
                 guest.room = None
                 await send(guest, {'type': 'room_closed'})
             room.members.clear()
-        elif 1 in room.members:
-            await send(room.members[1], {'type': 'peer_left', 'id': client.id})
+        else:
+            for member in list(room.members.values()):
+                await send(member, {'type': 'peer_left', 'id': client.id})
 
     async def dispatch(client, data):
         kind = data.get('type')
