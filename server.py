@@ -231,7 +231,23 @@ def create_app():
             if room.status == 'results':
                 await asyncio.to_thread(record_results,store,dict(room.members),room,state)
             for id, guest in list(room.members.items()):
-                if id != 1: await send(guest, {'type': 'state', 'state': state})
+                if id == 1 and isinstance(state.get('rules'),dict): await send(guest,{'type':'clock','server_time':time.time()})
+                if id != 1: await send(guest, {'type': 'state', 'state': state, 'server_time':time.time()})
+        elif kind == 'view':
+            room = client.room
+            if not room or room.status != 'draft' or room.state.get('market_stage') != 'transfer': return await error(client,'No active transfer window.')
+            if client.id != room.state.get('rules',{}).get('watch_id'): return await error(client,'Only the active player controls the shared view.')
+            view_kind, value = data.get('kind'), data.get('value')
+            if view_kind not in ('scroll','details','close_details') or not isinstance(value,(int,float)) or isinstance(value,bool) or not (0 <= value <= 100000): return await error(client,'Invalid shared view.')
+            for member in room.members.values():
+                if member is not client: await send(member,{'type':'view','kind':view_kind,'value':value})
+        elif kind == 'extra':
+            room = client.room
+            if not room or client.id == 1 or room.status != 'draft': return await error(client,'Join an active room first.')
+            action, pick, amount = data.get('action'), data.get('pick'), data.get('amount')
+            if action not in ('bid','predict') or not isinstance(pick,int) or isinstance(pick,bool) or not isinstance(amount,(int,float)) or isinstance(amount,bool) or not (0 <= amount <= 100000): return await error(client,'Invalid gameplay action.')
+            if any(m.detached_at for m in room.members.values()): return await error(client,'Play is paused while a player reconnects.')
+            await send(room.members[1],{'type':'extra','id':client.id,'action':action,'pick':pick,'amount':amount})
         elif kind == 'action':
             room = client.room
             if not room or client.id == 1: return await error(client, 'Join a room first.')
