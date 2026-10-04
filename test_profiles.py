@@ -25,16 +25,24 @@ async def main():
             async with client.ws_connect(base+'/ws') as ws:
                 await ws.send_json({'type':'create','name':'Profile Test Room','capacity':2,'budget':100,'profile_id':'profile_test','profile_token':token})
                 created=await ws.receive_json();assert created['type']=='created'
+                async with client.post(base+'/api/profiles',json={'id':'profile_guest'}) as response: guest_profile=await response.json()
+                async with client.put(base+'/api/profiles/profile_guest/avatar',headers={'Authorization':'Bearer '+guest_profile['token']},json={'image':image}) as response: assert response.status==200
+                async with client.ws_connect(base+'/ws') as guest:
+                    await guest.send_json({'type':'join','code':created['code'],'profile_id':'profile_guest','profile_token':guest_profile['token']})
+                    assert (await guest.receive_json())['type']=='joined'
+                    joined=await ws.receive_json()
+                    assert joined['type']=='peer_joined' and joined['avatar'] and joined['name']=='profile_guest'
+                assert (await ws.receive_json())['type']=='peer_disconnected'
                 data=json.loads(Path(__file__).with_name('market_catalog.json').read_text())
                 roster=[];used=set()
                 for index,(year,role) in enumerate(zip([2016,2017,2018,2020,2021,2022,2024],['Centre-Back','winger','Defensive Midfield','Goalkeeper','Centre-Forward','Attacking Midfield','Centre-Back'])):
                     for key,item in data.items():
                         pid,y=key.split('|')
                         if int(y)==year and item['role']==role and pid not in used:
-                            roster.append({'id':index,'player_id':pid,'buy_year':year});used.add(pid);break
+                            roster.append({'id':index,'slot':index,'player_id':pid,'buy_year':year});used.add(pid);break
                 expected=sum(data[p['player_id']+'|'+str(p['buy_year'])]['future']-data[p['player_id']+'|'+str(p['buy_year'])]['price'] for p in roster)
                 await ws.send_json({'type':'state','state':{'phase':'results','match_id':'profile_test_001','players':{'1':{'picks':list(range(7))}},'roster':roster,'sales':[]}})
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.5)
                 async with client.get(base+'/api/leaderboard') as response:
                     entries=(await response.json())['entries'];assert entries[0]['id']=='profile_test';assert abs(entries[0]['profit']-expected)<0.000001
         await runner.cleanup()

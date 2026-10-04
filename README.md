@@ -1,3 +1,11 @@
+## October gameplay update
+
+Unexpected disconnections reserve the same seat and squad for 90 seconds. The game pauses while a player reconnects. Recovery tokens are private and never listed. Explicit Leave still closes the host room. A service restart or a closed game cannot recover a live match.
+
+Rooms can enable a series of 2–10 games. Starting order rotates each game and series profit totals are shared by the host. Replacement markets are shared by position at the current transfer-window year; a bought replacement is unavailable to others. Scoring verifies those dated prices against the updated catalog.
+
+Only completed games with the standard €100M starting budget are eligible for the leaderboard. Older results without recorded budget are excluded; profiles and recovery keys are preserved.
+
 # Football Investor relay
 
 ## Persistent profiles and rankings
@@ -8,7 +16,7 @@ The new native Profile menu reserves a case-insensitive unique ID and supports a
 
 Leaderboard ranks one best net-profit result per profile from completed relay matches. `/ws` result states trigger calculation against `market_catalog.json`: actual archive prices, final values and recorded transfer-window values determine the result. The client cannot submit an arbitrary profit number. Online matches still trust their host's reported ownership and actions; this is a community ranking, not a cheat-proof competitive server. Matches and rooms themselves remain ephemeral. Test the profile API, recovery, images, scoring and restart persistence with `python test_profiles.py`.
 
-This server connects the native game clients over WebSockets. Players make outbound connections, so they do not need router port forwarding. A room host still runs the game rules; this service forwards authenticated room messages and manages room names, short codes, passwords, capacity and discovery. Rooms disappear when the host disconnects or the service restarts. There is no saved game progress, database, AI or paid API.
+This server connects the native game clients over WebSockets. Players make outbound connections, so they do not need router port forwarding. A room host still runs the game rules; this service forwards authenticated room messages and manages room names, short codes, passwords, capacity and discovery. Rooms disappear after an explicit host departure, a 90-second recovery expiry, or a service restart. There is no saved game progress, database, AI or paid API.
 
 The service is deployed on Render’s Free plan in Frankfurt. **Live endpoint: `wss://football-investor-relay.onrender.com/ws`.** Health check: https://football-investor-relay.onrender.com/health . The game is preconfigured to use it. Public game-client integration tests passed for room creation, listing, passwords, capacity, hidden identities, gameplay synchronization and disconnects. Source: https://github.com/MinzarescuNectarie/football-investor-relay .
 

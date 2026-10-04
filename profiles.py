@@ -28,6 +28,8 @@ class Store:
         self.run([('CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, avatar TEXT NOT NULL DEFAULT \'\', created BIGINT NOT NULL)',()),
                   ('CREATE TABLE IF NOT EXISTS results (profile_id TEXT NOT NULL, match_id TEXT NOT NULL, profit BIGINT NOT NULL, created BIGINT NOT NULL, PRIMARY KEY(profile_id,match_id))',()),
                   ('CREATE INDEX IF NOT EXISTS profit_index ON results(profit DESC)',())])
+        try: self.run([('ALTER TABLE results ADD COLUMN budget INTEGER',())])
+        except Exception: pass
         self.ready = True
     def auth(self, uid, token):
         if not isinstance(uid,str) or not isinstance(token,str): return False
@@ -99,7 +101,7 @@ def install(app):
         await asyncio.to_thread(store.run,[('UPDATE profiles SET avatar=? WHERE id=?',(photo,uid))])
         return web.json_response(await asyncio.to_thread(public,uid))
     async def leaderboard(request):
-        rows=(await asyncio.to_thread(store.run,[('SELECT p.id,p.avatar,MAX(r.profit) AS best FROM profiles p JOIN results r ON p.id=r.profile_id GROUP BY p.id,p.avatar ORDER BY best DESC,p.id ASC LIMIT 50',())]))[0]
+        rows=(await asyncio.to_thread(store.run,[('SELECT p.id,p.avatar,MAX(r.profit) AS best FROM profiles p JOIN results r ON p.id=r.profile_id WHERE r.budget=100 GROUP BY p.id,p.avatar ORDER BY best DESC,p.id ASC LIMIT 50',())]))[0]
         return web.json_response({'entries':[{'id':uid,'avatar':avatar,'profit':profit/1000000} for uid,avatar,profit in rows], 'metric':'Highest completed online-match net profit (€M)'})
     app.router.add_post('/api/profiles',create)
     app.router.add_get('/api/profiles/{uid}',profile)
@@ -110,6 +112,7 @@ def install(app):
 
 def record_results(store, clients, room, state):
     """Never accept a client-supplied score; derive it from dated archive prices."""
+    if room.budget != 100: return
     catalog_path=Path(__file__).with_name('market_catalog.json')
     if not catalog_path.exists(): return
     catalog=json.loads(catalog_path.read_text(encoding='utf-8'))
@@ -127,7 +130,8 @@ def record_results(store, clients, room, state):
         try:
             person=state['players'].get(str(cid),state['players'].get(cid))
             picks=[assets[int(pid)] for pid in person['picks']]
-            if len(picks)!=7 or {int(p['buy_year']) for p in picks}!=buy_years: continue
+            if len(picks)!=7 or sorted(int(p['slot']) for p in picks)!=list(range(7)): continue
+            if any(int(p['buy_year']) not in buy_years | {2019,2025} for p in picks): continue
             if len({p['player_id'] for p in picks})!=7: continue
             roles=sorted(verified(p)['role'] for p in picks)
             if roles!=sorted(['Centre-Back','Centre-Back','winger','Goalkeeper','Defensive Midfield','Attacking Midfield','Centre-Forward']): continue
@@ -136,5 +140,6 @@ def record_results(store, clients, room, state):
                 if int(sale['owner'])!=cid: continue
                 item=verified(assets[int(sale['pick'])]);year=str(sale['year'])
                 profit+=item['windows'][year]-item['price']
-            store.run([('INSERT INTO results(profile_id,match_id,profit,created) VALUES(?,?,?,?) ON CONFLICT(profile_id,match_id) DO NOTHING',(client.profile_id,room.code+'-'+match,round(profit*1000000),int(time.time())))])
+            store.run([('INSERT INTO results(profile_id,match_id,profit,created,budget) VALUES(?,?,?,?,?) ON CONFLICT(profile_id,match_id) DO NOTHING',(client.profile_id,room.code+'-'+match,round(profit*1000000),int(time.time()),100))])
         except (ValueError,TypeError,KeyError): continue
+

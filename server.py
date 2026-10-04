@@ -23,6 +23,8 @@ class Client:
     profile_id: str = ''
     avatar: str = ''
     tokens: float = 60
+    resume_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    detached_at: float = 0
     checked: float = field(default_factory=time.monotonic)
 
 @dataclass
@@ -36,11 +38,14 @@ class Room:
     members: dict = field(default_factory=dict)
     next_id: int = 2
     status: str = 'lobby'
+    state: dict = field(default_factory=dict)
+    series_games: int = 1
 
 def create_app():
     app = web.Application(client_max_size=1500000)
     store = install(app)
     rooms, clients = {}, set()
+    recovery_tasks=set()
 
     async def send(client, data):
         if client.ws.closed: return
@@ -55,9 +60,20 @@ def create_app():
     async def error(client, text):
         await send(client, {'type': 'error', 'message': text})
 
-    async def detach(client):
+    async def detach(client, permanent=True):
         room = client.room
         if room is None: return
+        if not permanent:
+            client.detached_at = time.monotonic()
+            for member in list(room.members.values()):
+                if member is not client: await send(member, {'type':'peer_disconnected','id':client.id,'grace':90})
+            async def expire():
+                await asyncio.sleep(90)
+                if room.members.get(client.id) is client and client.detached_at:
+                    await detach(client)
+            task=asyncio.create_task(expire())
+            recovery_tasks.add(task);task.add_done_callback(recovery_tasks.discard)
+            return
         client.room = None
         room.members.pop(client.id, None)
         if client.id == 1:
@@ -88,7 +104,19 @@ def create_app():
                     reserved=(await asyncio.to_thread(store.run,[('SELECT id FROM profiles WHERE id=?',(proposed,))]))[0]
                     if reserved: return await error(client,'That ID belongs to a profile. Restore it using its recovery key.')
 
-        if kind == 'list':
+        if kind == 'resume':
+            room=rooms.get(str(data.get('code','')).strip().upper())
+            if not room: return await error(client,'Recovery expired. The room has closed.')
+            old=next((m for m in room.members.values() if hmac.compare_digest(m.resume_token,str(data.get('resume_token','')))),None)
+            if not old or not old.detached_at or time.monotonic()-old.detached_at>90:
+                return await error(client,'Recovery unavailable or already connected.')
+            client.room,client.id,client.profile_id,client.avatar,client.resume_token=room,old.id,old.profile_id,old.avatar,old.resume_token
+            room.members[client.id]=client;old.room=None
+            await send(client,{'type':'resumed','id':client.id,'code':room.code,'missing':[m.id for m in room.members.values() if m.detached_at]})
+            for member in list(room.members.values()):
+                if member is not client: await send(member,{'type':'peer_reconnected','id':client.id})
+            if client.id != 1 and room.state: await send(client,{'type':'state','state':room.state})
+        elif kind == 'list':
             listing = [{'name': r.name, 'code': r.code, 'private': bool(r.password),
                         'players': len(r.members), 'capacity': r.capacity,
                         'budget': r.budget, 'status': r.status} for r in rooms.values()]
@@ -116,11 +144,13 @@ def create_app():
             while True:
                 code = 'FI-R-' + ''.join(secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in range(10)) + ('-P' if password else '-U')
                 if code not in rooms: break
-            room = Room(code, name, capacity, budget, salt, digest)
+            games=data.get('series_games',1)
+            if not isinstance(games,int) or not 1<=games<=10: return await error(client,'Series must contain 1–10 games.')
+            room = Room(code, name, capacity, budget, salt, digest,series_games=games)
             rooms[code] = room
             client.room, client.id = room, 1
             room.members[1] = client
-            await send(client, {'type': 'created', 'code': code, 'id': 1})
+            await send(client, {'type': 'created', 'code': code, 'id': 1, 'resume_token':client.resume_token})
         elif kind == 'join':
             if client.room: return await error(client, 'Leave your current room first.')
             room = rooms.get(str(data.get('code', '')).strip().upper())
@@ -139,7 +169,7 @@ def create_app():
             client.room, client.id = room, room.next_id
             room.next_id += 1
             room.members[client.id] = client
-            await send(client, {'type': 'joined', 'id': client.id, 'code': room.code})
+            await send(client, {'type': 'joined', 'id': client.id, 'code': room.code, 'resume_token':client.resume_token})
             await send(room.members[1], {'type': 'peer_joined', 'id': client.id, 'name': str(data.get('name', 'Guest')).strip()[:40] or 'Guest', 'avatar':client.avatar})
         elif kind == 'state':
             room = client.room
@@ -148,6 +178,8 @@ def create_app():
             if not isinstance(state, dict) or state.get('phase') not in ('lobby', 'draft', 'results'):
                 return await error(client, 'Invalid game state.')
             room.status = state['phase']
+            state['series_games']=room.series_games
+            room.state=state
             for member_id,member in room.members.items():
                 person=state.get('players',{}).get(str(member_id),state.get('players',{}).get(member_id))
                 if member.profile_id and isinstance(person,dict):
@@ -162,6 +194,7 @@ def create_app():
             if not room or client.id == 1: return await error(client, 'Join a room first.')
             action, pick = data.get('action'), data.get('pick')
             if action not in ('pick', 'hold') or not isinstance(pick, int): return await error(client, 'Invalid player action.')
+            if any(m.detached_at for m in room.members.values()): return await error(client,'Play is paused while a player reconnects.')
             await send(room.members[1], {'type': 'action', 'id': client.id, 'action': action, 'pick': pick})
         elif kind == 'leave':
             await detach(client)
@@ -197,7 +230,7 @@ def create_app():
                 except (ValueError, TypeError, KeyError):
                     await error(client, 'Invalid request.')
         finally:
-            await detach(client)
+            await detach(client,permanent=False)
             clients.discard(client)
         return ws
 
@@ -205,6 +238,7 @@ def create_app():
         return web.json_response({'service': 'Football Investor relay', 'protocol': 1, 'rooms': len(rooms), 'profiles': store.ready, 'persistent_profiles': bool(store.url)})
 
     async def shutdown(app):
+        for task in recovery_tasks: task.cancel()
         await asyncio.gather(*(c.ws.close(code=1001, message=b'Server restarting') for c in list(clients)))
 
     app.router.add_get('/ws', websocket)
