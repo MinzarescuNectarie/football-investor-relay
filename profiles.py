@@ -112,7 +112,7 @@ def install(app):
 
 def record_results(store, clients, room, state):
     """Never accept a client-supplied score; derive it from dated archive prices."""
-    if room.budget != 100: return
+    if room.budget != 100 or state.get("rules",{}).get("mode","fixed") != "fixed": return
     catalog_path=Path(__file__).with_name('market_catalog.json')
     if not catalog_path.exists(): return
     catalog=json.loads(catalog_path.read_text(encoding='utf-8'))
